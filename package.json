@@ -1,5 +1,5 @@
 {
-  "name": "opencode-yaml-hooks",
+  "name": "@expnn/opencode-yaml-hooks",
   "version": "1.0.0",
   "description": "OpenCode plugin for running command, tool, and bash hooks from hooks.yaml during session and tool lifecycle events.",
   "type": "module",
@@ -32,11 +32,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KristjanPikhof/OpenCode-Hooks.git"
+    "url": "git+https://github.com/expnn/opencode-yaml-hooks.git"
   },
-  "homepage": "https://github.com/KristjanPikhof/OpenCode-Hooks#readme",
+  "homepage": "https://github.com/expnn/opencode-yaml-hooks#readme",
   "bugs": {
-    "url": "https://github.com/KristjanPikhof/OpenCode-Hooks/issues"
+    "url": "https://github.com/expnn/opencode-yaml-hooks/issues"
   },
   "license": "MIT",
   "peerDependencies": {
