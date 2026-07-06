@@ -20,7 +20,7 @@ export async function executeBashHook(request: BashExecutionRequest): Promise<Ba
   const processResult = await executeBashProcess(request)
   const hookResult = mapBashProcessResultToHookResult(processResult, request.context)
 
-  logBashOutcome(hookResult, request)
+  await logBashOutcome(hookResult, request, request.client)
   return hookResult
 }
 
@@ -145,32 +145,42 @@ function appendStderr(stderr: string, message?: string): string {
   return `${stderr}${stderr.endsWith("\n") ? "" : "\n"}${message}`
 }
 
-function logBashOutcome(result: BashHookResult, request: BashExecutionRequest): void {
+async function logBashOutcome(
+  result: BashHookResult,
+  request: BashExecutionRequest,
+  client?: BashExecutionRequest["client"],
+): Promise<void> {
   if (result.status !== "failed" && result.status !== "timed_out") {
     return
   }
 
-  const details = [
-    `[opencode-yaml-hooks] Bash hook ${result.status}`,
-    `event=${request.context.event}`,
-    `session=${request.context.session_id}`,
-    `cwd=${request.context.cwd}`,
-    `projectDir=${request.projectDir}`,
-    `exitCode=${result.exitCode}`,
-    `signal=${result.signal ?? "none"}`,
-    `durationMs=${result.durationMs}`,
-    `command=${JSON.stringify(sanitizeLogValue(result.command))}`,
-  ]
+  const summary = result.status === "timed_out"
+    ? `Bash hook timed out (${result.durationMs}ms): ${request.context.event}`
+    : `Bash hook failed (exit ${result.exitCode}): ${request.context.event}`
 
-  if (result.stderr.trim()) {
-    details.push(`stderr=${JSON.stringify(sanitizeLogValue(result.stderr.trim()))}`)
+  try {
+    const logResult = await client?.app.log({
+      body: {
+        service: "opencode-yaml-hooks",
+        level: result.status === "timed_out" ? "warn" : "error",
+        message: summary,
+        extra: {
+          event: request.context.event,
+          session_id: request.context.session_id,
+          cwd: request.context.cwd,
+          projectDir: request.projectDir,
+          exitCode: result.exitCode,
+          signal: result.signal ?? "none",
+          durationMs: result.durationMs,
+          command: sanitizeLogValue(result.command),
+          stderr: sanitizeLogValue(result.stderr.trim()),
+          stdout: sanitizeLogValue(result.stdout.trim()),
+        },
+      },
+    })
+  } catch (logError) {
+    console.error(`[opencode-yaml-hooks] ${summary}`)
   }
-
-  if (result.stdout.trim()) {
-    details.push(`stdout=${JSON.stringify(sanitizeLogValue(result.stdout.trim()))}`)
-  }
-
-  console.error(details.join(" | "))
 }
 
 function sanitizeLogValue(value: string): string {

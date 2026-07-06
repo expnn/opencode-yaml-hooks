@@ -51,39 +51,44 @@ describe("executeBashHook", () => {
   })
 
   it("marks timed out processes as non-blocking failures", async () => {
+    const failingClient = { app: { log: vi.fn(async () => { throw new Error("log unavailable") }) } }
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     const result = await executeBashHook({
       command: "sleep 1",
       context: baseContext,
       projectDir: "/repo/project",
       timeout: 50,
+      client: failingClient,
     })
 
     expect(result.status).toBe("timed_out")
     expect(result.blocking).toBe(false)
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain("Command timed out after 50ms")
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Bash hook timed_out"))
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Bash hook timed out"))
     errorSpy.mockRestore()
   })
 
   it("logs non-blocking bash failures with command details", async () => {
+    const failingClient = { app: { log: vi.fn(async () => { throw new Error("log unavailable") }) } }
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     const result = await executeBashHook({
       command: "printf 'broken' >&2; exit 1",
       context: baseContext,
       projectDir: "/repo/project",
+      client: failingClient,
     })
 
     expect(result.status).toBe("failed")
     expect(result.blocking).toBe(false)
     expect(result.stderr).toBe("broken")
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('command="printf \'broken\' >&2; exit 1"'))
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Bash hook failed"))
     errorSpy.mockRestore()
   })
 
   it("redacts and truncates bash failure logs by default", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const appLog = vi.fn(async () => ({ data: {}, response: { status: 200 } }))
+    const workingClient = { app: { log: appLog } }
     const secret = "super-secret-token-value"
     const longOutput = "x".repeat(600)
 
@@ -91,17 +96,19 @@ describe("executeBashHook", () => {
       command: `printf 'token=${secret}\n${longOutput}' >&2; exit 1`,
       context: baseContext,
       projectDir: "/repo/project",
+      client: workingClient,
     })
 
-    const logged = errorSpy.mock.calls[0]?.[0]
-    expect(logged).toContain("token=[REDACTED]")
-    expect(logged).toContain("[truncated")
-    expect(logged).not.toContain(secret)
-    errorSpy.mockRestore()
+    const logCall = appLog.mock.calls[0]?.[0]
+    expect(logCall).toBeDefined()
+    expect(logCall.body.extra.stderr).toContain("token=[REDACTED]")
+    expect(logCall.body.extra.stderr).toContain("[truncated")
+    expect(logCall.body.extra.stderr).not.toContain(secret)
   })
 
   it("redacts quoted and JSON-style secrets in bash failure logs", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const appLog = vi.fn(async () => ({ data: {}, response: { status: 200 } }))
+    const workingClient = { app: { log: appLog } }
     const token = "json-token-secret"
     const password = "quoted-password-secret"
     const payload = `{"token":"${token}","nested":{"password":"${password}"}} password="${password}"`
@@ -110,13 +117,14 @@ describe("executeBashHook", () => {
       command: `node -e 'process.stderr.write(${JSON.stringify(payload)}); process.exit(1)'`,
       context: baseContext,
       projectDir: "/repo/project",
+      client: workingClient,
     })
 
-    const logged = errorSpy.mock.calls[0]?.[0]
-    expect(logged).toContain('stderr="{\\"token\\":\\"[REDACTED]\\",\\"nested\\":{\\"password\\":\\"[REDACTED]\\"}} password=\\"[REDACTED]\\""')
-    expect(logged).not.toContain(token)
-    expect(logged).not.toContain(password)
-    errorSpy.mockRestore()
+    const logCall = appLog.mock.calls[0]?.[0]
+    expect(logCall).toBeDefined()
+    expect(logCall.body.extra.stderr).toContain('"token":"[REDACTED]"')
+    expect(logCall.body.extra.stderr).not.toContain(token)
+    expect(logCall.body.extra.stderr).not.toContain(password)
   })
 
   it("uses worktree-aware env for git repositories", async () => {
@@ -141,6 +149,7 @@ describe("executeBashHook", () => {
   })
 
   it("reports spawn failures as non-blocking failed hooks", async () => {
+    const failingClient = { app: { log: vi.fn(async () => { throw new Error("log unavailable") }) } }
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     const missingDir = path.join(os.tmpdir(), `opencode-yaml-hooks-missing-${Date.now()}`)
 
@@ -151,6 +160,7 @@ describe("executeBashHook", () => {
         cwd: missingDir,
       },
       projectDir: missingDir,
+      client: failingClient,
     })
 
     expect(result.status).toBe("failed")

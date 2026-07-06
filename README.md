@@ -6,19 +6,7 @@ Use it to run tests after edits, lint changed files, block risky commands before
 
 ## Install
 
-Install from npm with Bun:
-
-```bash
-bun add opencode-yaml-hooks
-```
-
-Or install directly from this repo:
-
-```bash
-bun add "https://github.com/KristjanPikhof/OpenCode-Hooks.git"
-```
-
-Then register it in your `opencode.json`:
+Register it in your `opencode.json`:
 
 ```json
 {
@@ -26,8 +14,6 @@ Then register it in your `opencode.json`:
   "plugin": ["opencode-yaml-hooks"]
 }
 ```
-
-OpenCode resolves the package by name, so the plugin entry stays `opencode-yaml-hooks` even when you install it from GitHub.
 
 ## Quick start
 
@@ -40,7 +26,8 @@ Then add a minimal hook:
 
 ```yaml
 hooks:
-  - event: file.changed
+  - name: npm-test
+    event: file.changed
     conditions: [matchesCodeFiles]
     actions:
       - bash: "npm test"
@@ -77,8 +64,9 @@ Explicit defaults in the current runtime:
 
 ```yaml
 hooks:
-  - event: <hook-event>
-    action: <stop>             # optional, only for tool.before.* hooks
+  - name: <hook-name>
+    event: <hook-event>
+    action: <stop>            # optional, only for tool.before.* hooks
     scope: <all|main|child>   # optional, defaults to all
     runIn: <current|main>     # optional, defaults to current
     async: <boolean>          # optional, fire-and-forget execution

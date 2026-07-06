@@ -79,6 +79,7 @@ export interface HookConfigSource {
 export interface HookConfig {
   readonly id?: string
   readonly event: HookEvent
+  readonly name?: string
   readonly action?: HookBehavior
   readonly actions: HookAction[]
   readonly scope: HookScope

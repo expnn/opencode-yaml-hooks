@@ -234,6 +234,8 @@ function parseHookDefinition(
     return { errors: [...idResult.errors, ...overrideResult.errors, createError(filePath, "invalid_event", `hooks[${index}].event is not a supported hook event.`, `hooks[${index}].event`)] }
   }
 
+  const name = typeof hookDefinition.name === "string" && hookDefinition.name.trim().length > 0 ? hookDefinition.name : undefined
+
   const scopeResult = parseScope(filePath, hookDefinition.scope, index)
   const runInResult = parseRunIn(filePath, hookDefinition.runIn, index)
   const actionResult = parseHookAction(filePath, hookDefinition.action, event, index)
@@ -250,6 +252,7 @@ function parseHookDefinition(
   const hook: HookConfig = {
     ...(idResult.id ? { id: idResult.id } : {}),
     event,
+    ...(name ? { name } : {}),
     ...(actionResult.action ? { action: actionResult.action } : {}),
     actions: actionsResult.actions,
     scope: scopeResult.scope,

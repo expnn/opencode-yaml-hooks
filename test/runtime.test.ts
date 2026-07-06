@@ -12,11 +12,15 @@ function createMockPluginInput() {
   const prompt = vi.fn(async () => ({ data: {}, response: { status: 200 } }))
   const get = vi.fn(async () => ({ data: {} }))
   const abort = vi.fn(async () => ({ data: {}, response: { status: 200 } }))
+  const appLog = vi.fn(async () => ({ data: {}, response: { status: 200 } }))
 
   return {
     input: {
       directory: "/repo/project",
       client: {
+        app: {
+          log: appLog,
+        },
         session: {
           command,
           prompt,
@@ -29,12 +33,13 @@ function createMockPluginInput() {
     prompt,
     get,
     abort,
+    appLog,
   }
 }
 
 function createHook(
   event: HookEvent,
-  config: Omit<HookConfig, "event" | "scope" | "runIn"> & Partial<Pick<HookConfig, "scope" | "runIn">>,
+  config: Omit<HookConfig, "event" | "scope" | "runIn"> & Partial<Pick<HookConfig, "scope" | "runIn" | "name">>,
 ): HookConfig {
   return {
     event,
@@ -963,9 +968,8 @@ describe("createHooksRuntime", () => {
   })
 
   it("logs abort failures but still blocks the tool", async () => {
-    const { input, abort } = createMockPluginInput()
+    const { input, abort, appLog } = createMockPluginInput()
     abort.mockRejectedValueOnce(new Error("abort failed"))
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     const executeBash = vi.fn(async () => ({
       command: "hook",
       stdout: "",
@@ -982,7 +986,7 @@ describe("createHooksRuntime", () => {
       ["tool.before.write", [createHook("tool.before.write", { action: "stop", actions: [{ bash: "hook" }], source: { filePath: "a", index: 0 } })]],
     ])
 
-    const runtime = createHooksRuntime(input as never, { hooks, executeBash })
+    const runtime = createHooksRuntime(input as never, { hooks, executeBash, client: input.client })
 
     await expect(
       runtime["tool.execute.before"]?.(
@@ -991,8 +995,15 @@ describe("createHooksRuntime", () => {
       ),
     ).rejects.toThrow("blocked:stop")
 
-    expect(errorSpy).toHaveBeenCalledWith("[opencode-yaml-hooks] Failed to abort session session-1: abort failed")
-    errorSpy.mockRestore()
+    expect(appLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          service: "opencode-yaml-hooks",
+          level: "error",
+          message: "Failed to abort session session-1: abort failed",
+        }),
+      }),
+    )
   })
 
   it("serializes overlapping blocking tool.before hooks instead of bypassing queued enforcement", async () => {
@@ -1284,10 +1295,9 @@ describe("createHooksRuntime", () => {
   })
 
   it("logs runIn main resolution failures inside action handling without aborting dispatch", async () => {
-    const { input, get } = createMockPluginInput()
+    const { input, get, appLog } = createMockPluginInput()
     get.mockRejectedValueOnce(new Error("root lookup failed"))
 
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     const bashEvents: string[] = []
     const executeBash = vi.fn(async ({ context }) => {
       bashEvents.push(context.event)
@@ -1317,7 +1327,7 @@ describe("createHooksRuntime", () => {
       ],
     ])
 
-    const runtime = createHooksRuntime(input as never, { hooks, executeBash })
+    const runtime = createHooksRuntime(input as never, { hooks, executeBash, client: input.client })
 
     await runtime["tool.execute.before"]?.(
       { tool: "write", sessionID: "child-session", callID: "call-resolution-failure" },
@@ -1332,8 +1342,15 @@ describe("createHooksRuntime", () => {
     ).resolves.toBeUndefined()
 
     expect(bashEvents).toEqual(["tool.after.write"])
-    expect(errorSpy).toHaveBeenCalledWith("[opencode-yaml-hooks] tool.after.write hook from a failed: root lookup failed")
-    errorSpy.mockRestore()
+    expect(appLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          service: "opencode-yaml-hooks",
+          level: "error",
+          message: "tool.after.write hook from a failed: root lookup failed",
+        }),
+      }),
+    )
   })
 
   it("allows parallel runIn main command and tool actions without skipping independent dispatches", async () => {
@@ -1553,7 +1570,7 @@ describe("createHooksRuntime", () => {
       "utf8",
     )
 
-    const { input } = createMockPluginInput()
+    const { input, appLog } = createMockPluginInput()
     const executeBash = vi.fn(async () => ({
       command: "hook",
       stdout: "",
@@ -1565,15 +1582,21 @@ describe("createHooksRuntime", () => {
       status: "success" as const,
       blocking: false,
     }))
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
 
-    const runtime = createHooksRuntime({ ...(input as object), directory: projectDir } as never, { executeBash })
+    const runtime = createHooksRuntime({ ...(input as object), directory: projectDir } as never, { executeBash, client: input.client })
 
     await runtime.event?.({ event: { type: "session.created", properties: { info: { id: "session-1" } } } } as never)
 
     expect(executeBash).toHaveBeenCalledTimes(1)
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("continuing with valid hooks"))
-    errorSpy.mockRestore()
+    expect(appLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          service: "opencode-yaml-hooks",
+          level: "error",
+          message: expect.stringContaining("continuing with valid hooks"),
+        }),
+      }),
+    )
   })
 
   it("reloads hooks.yaml before new events after a valid edit", async () => {
@@ -1623,7 +1646,7 @@ describe("createHooksRuntime", () => {
     mkdirSync(path.join(projectDir, ".opencode", "hook"), { recursive: true })
     const hooksPath = path.join(projectDir, ".opencode", "hook", "hooks.yaml")
 
-    const { input } = createMockPluginInput()
+    const { input, appLog } = createMockPluginInput()
     const executeBash = vi.fn(async ({ command }) => ({
       command,
       stdout: "",
@@ -1635,7 +1658,6 @@ describe("createHooksRuntime", () => {
       status: "success" as const,
       blocking: false,
     }))
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
 
     writeFileSync(
       hooksPath,
@@ -1647,7 +1669,7 @@ describe("createHooksRuntime", () => {
       "utf8",
     )
 
-    const runtime = createHooksRuntime({ ...(input as object), directory: projectDir } as never, { executeBash })
+    const runtime = createHooksRuntime({ ...(input as object), directory: projectDir } as never, { executeBash, client: input.client })
 
     await runtime.event?.({ event: { type: "session.created", properties: { info: { id: "session-1" } } } } as never)
 
@@ -1676,10 +1698,25 @@ describe("createHooksRuntime", () => {
     await runtime.event?.({ event: { type: "session.created", properties: { info: { id: "session-4" } } } } as never)
 
     expect(executeBash.mock.calls.map(([request]) => request.command)).toEqual(["valid", "valid", "valid", "fixed"])
-    expect(errorSpy).toHaveBeenCalledTimes(1)
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("keeping last known good hooks"))
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("actions must be a non-empty array"))
-    errorSpy.mockRestore()
+    expect(appLog).toHaveBeenCalledTimes(1)
+    expect(appLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          service: "opencode-yaml-hooks",
+          level: "error",
+          message: expect.stringContaining("keeping last known good hooks"),
+        }),
+      }),
+    )
+    expect(appLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          service: "opencode-yaml-hooks",
+          level: "error",
+          message: expect.stringContaining("actions must be a non-empty array"),
+        }),
+      }),
+    )
   })
 
   it("keeps the action cwd for runIn main command and tool actions", async () => {
@@ -1798,8 +1835,7 @@ describe("createHooksRuntime", () => {
   })
 
   it("async hook errors are caught and logged, not thrown", async () => {
-    const { input } = createMockPluginInput()
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const { input, appLog } = createMockPluginInput()
 
     const executeBash = vi.fn(async () => {
       throw new Error("async hook exploded")
@@ -1809,7 +1845,7 @@ describe("createHooksRuntime", () => {
       [["file.changed" as const][0], [createHook("file.changed", { async: true, actions: [{ bash: "hook" }], source: { filePath: "a", index: 0 } })]],
     ])
 
-    const runtime = createHooksRuntime(input as never, { hooks, executeBash })
+    const runtime = createHooksRuntime(input as never, { hooks, executeBash, client: input.client })
 
     await runtime["tool.execute.before"]?.(
       { tool: "write", sessionID: "session-1", callID: "call-err" },
@@ -1822,10 +1858,15 @@ describe("createHooksRuntime", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 10))
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("async hook exploded"),
+    expect(appLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          service: "opencode-yaml-hooks",
+          level: "error",
+          message: expect.stringContaining("async hook exploded"),
+        }),
+      }),
     )
-    errorSpy.mockRestore()
   })
 
   it("async hook with multiple actions preserves sequential order", async () => {

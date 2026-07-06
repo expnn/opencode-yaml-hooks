@@ -149,14 +149,20 @@ type ExecuteBashHook = (request: BashExecutionRequest) => ReturnType<typeof exec
 export interface CreateHooksRuntimeOptions {
   readonly hooks?: HookMap
   readonly executeBash?: ExecuteBashHook
+  readonly client?: PluginInput["client"]
 }
 
 export function createHooksRuntime(input: PluginInput, options: CreateHooksRuntimeOptions = {}): Hooks {
   let loaded = options.hooks
     ? { hooks: options.hooks, errors: [] as HookValidationError[], signature: "manual" }
     : loadDiscoveredHooksSnapshot({ projectDir: input.directory })
+  const client = options.client
   if (loaded.errors.length > 0) {
-    console.error(formatHookLoadErrors(loaded.errors))
+    const msg = formatHookLoadErrors(loaded.errors)
+    const logPromise = client?.app.log({ body: { service: "opencode-yaml-hooks", level: "error", message: msg } })
+    if (logPromise) {
+      logPromise.catch(() => { console.error(`[opencode-yaml-hooks] hook load errors (app.log unavailable): ${msg}`) })
+    }
   }
 
   let hooks = loaded.hooks
@@ -181,7 +187,11 @@ export function createHooksRuntime(input: PluginInput, options: CreateHooksRunti
     lastLoadedSignature = nextLoaded.signature
     if (nextLoaded.errors.length > 0) {
       if (lastReportedInvalidSignature !== nextLoaded.signature) {
-        console.error(formatHookReloadErrors(nextLoaded.errors))
+        const msg = formatHookReloadErrors(nextLoaded.errors)
+const logPromise = client?.app.log({ body: { service: "opencode-yaml-hooks", level: "error", message: msg } })
+        if (logPromise) {
+          logPromise.catch(() => { console.error(`[opencode-yaml-hooks] hook reload errors (app.log unavailable): ${msg}`) })
+        }
         lastReportedInvalidSignature = nextLoaded.signature
       }
       return hooks
@@ -218,12 +228,13 @@ export function createHooksRuntime(input: PluginInput, options: CreateHooksRunti
           toolName: eventInput.tool,
           toolArgs,
         },
+        client,
       )
 
       if (result.blocked) {
         state.consumePendingToolCall(eventInput.callID)
         if (result.stopSession) {
-          await abortSession(input, sessionID)
+          await abortSession(input, sessionID, client)
         }
         throw new Error(result.blockReason ?? "Blocked by hook")
       }
@@ -249,7 +260,7 @@ export function createHooksRuntime(input: PluginInput, options: CreateHooksRunti
           changes,
           toolName: eventInput.tool,
           toolArgs,
-        }, {}, dispatchStates, actionRecursionGuards, asyncQueues)
+        }, {}, dispatchStates, actionRecursionGuards, asyncQueues, client)
       }
 
       await dispatchToolHooks(
@@ -269,6 +280,7 @@ export function createHooksRuntime(input: PluginInput, options: CreateHooksRunti
           toolName: eventInput.tool,
           toolArgs,
         },
+        client,
       )
     },
 
@@ -284,7 +296,7 @@ export function createHooksRuntime(input: PluginInput, options: CreateHooksRunti
         }
 
         state.rememberSession(sessionID, pickString(info?.parentID) ?? null)
-        await dispatchHooks(activeHooks, state, input, runBashHook, "session.created", sessionID, {}, {}, dispatchStates, actionRecursionGuards, asyncQueues)
+        await dispatchHooks(activeHooks, state, input, runBashHook, "session.created", sessionID, {}, {}, dispatchStates, actionRecursionGuards, asyncQueues, client)
         return
       }
 
@@ -297,7 +309,7 @@ export function createHooksRuntime(input: PluginInput, options: CreateHooksRunti
         
         state.rememberSession(sessionID, pickString(info?.parentID) ?? undefined)
         state.deleteSession(sessionID)
-        await dispatchHooks(activeHooks, state, input, runBashHook, "session.deleted", sessionID, {}, {}, dispatchStates, actionRecursionGuards, asyncQueues)
+        await dispatchHooks(activeHooks, state, input, runBashHook, "session.deleted", sessionID, {}, {}, dispatchStates, actionRecursionGuards, asyncQueues, client)
         return
       }
 
@@ -312,7 +324,7 @@ export function createHooksRuntime(input: PluginInput, options: CreateHooksRunti
         state.beginIdleDispatch(sessionID, changes)
 
         try {
-          await dispatchHooks(activeHooks, state, input, runBashHook, "session.idle", sessionID, { files, changes }, {}, dispatchStates, actionRecursionGuards, asyncQueues)
+          await dispatchHooks(activeHooks, state, input, runBashHook, "session.idle", sessionID, { files, changes }, {}, dispatchStates, actionRecursionGuards, asyncQueues, client)
           state.consumeFileChanges(sessionID, changes)
         } catch (error) {
           state.cancelIdleDispatch(sessionID)
@@ -335,6 +347,7 @@ async function dispatchToolHooks(
   toolName: string,
   sessionID: string,
   context: RuntimeActionContext,
+  client?: PluginInput["client"],
 ): Promise<HookExecutionResult> {
   const wildcardResult = await dispatchHooks(
     hooks,
@@ -348,6 +361,7 @@ async function dispatchToolHooks(
     dispatchStates,
     actionRecursionGuards,
     asyncQueues,
+    client,
   )
   if (wildcardResult.blocked) {
     return wildcardResult
@@ -366,6 +380,7 @@ async function dispatchToolHooks(
       dispatchStates,
       actionRecursionGuards,
       asyncQueues,
+      client,
     )
 
     if (result.blocked) {
@@ -388,6 +403,7 @@ async function dispatchHooks(
   dispatchStates: Map<string, DispatchState>,
   actionRecursionGuards: AsyncLocalStorage<Set<string>>,
   asyncQueues: Map<string, Promise<void>>,
+  client?: PluginInput["client"],
 ): Promise<HookExecutionResult> {
   const eventHooks = hooks.get(event)
   if (!eventHooks || eventHooks.length === 0) {
@@ -444,7 +460,7 @@ async function dispatchHooks(
 
   async function executeDispatchRequest(request: DispatchRequest): Promise<HookExecutionResult> {
     for (const hook of hooksForEvent) {
-      const result = await executeHook(hook, state, input, runBashHook, sessionID, request.context, request.options, actionRecursionGuards, asyncQueues)
+      const result = await executeHook(hook, state, input, runBashHook, sessionID, request.context, request.options, actionRecursionGuards, asyncQueues, client)
       if (result.blocked) {
         return result
       }
@@ -483,13 +499,14 @@ async function executeHook(
   options: { canBlock?: boolean },
   actionRecursionGuards: AsyncLocalStorage<Set<string>>,
   asyncQueues: Map<string, Promise<void>>,
+  client?: PluginInput["client"],
 ): Promise<HookExecutionResult> {
   try {
     if (!(await shouldRunHook(hook, state, input, sessionID, context))) {
       return { blocked: false }
     }
   } catch (error) {
-    logHookFailure(hook.event, hook.source.filePath, error)
+    await logHookFailure(hook.event, hook.source.filePath, error, client, hook.name)
     return { blocked: false }
   }
 
@@ -509,10 +526,12 @@ async function executeHook(
           context,
           hook.source.filePath,
           actionRecursionGuards,
+          client,
+          hook.name,
         )
       }
-    }).catch((error) => {
-      logHookFailure(hook.event, hook.source.filePath, error)
+    }).catch(async (error) => {
+      await logHookFailure(hook.event, hook.source.filePath, error, client, hook.name)
     }).finally(() => {
       if (asyncQueues.get(queueKey) === next) {
         asyncQueues.delete(queueKey)
@@ -534,6 +553,8 @@ async function executeHook(
       context,
       hook.source.filePath,
       actionRecursionGuards,
+      client,
+      hook.name,
     )
     if (result.blocked && options.canBlock) {
       return {
@@ -618,6 +639,15 @@ function normalizeGlobCandidate(filePath: string): string {
   return filePath.replaceAll("\\", "/").replace(/^\.\//, "")
 }
 
+function truncateCommand(command: string, maxLen = 50): string {
+  if (command.length <= maxLen) {
+    return command
+  }
+  const keepStart = Math.floor(maxLen * 0.7)  // 35 chars
+  const keepEnd = maxLen - keepStart - 3       // 12 chars for the "..."
+  return `${command.slice(0, keepStart)}...${command.slice(-keepEnd)}`
+}
+
 async function executeAction(
   action: HookAction,
   runIn: HookRunIn,
@@ -629,6 +659,8 @@ async function executeAction(
   context: RuntimeActionContext,
   sourceFilePath: string,
   actionRecursionGuards: AsyncLocalStorage<Set<string>>,
+  client?: PluginInput["client"],
+  hookName?: string,
 ): Promise<HookExecutionResult> {
   const executionDirectory = input.directory
 
@@ -652,7 +684,7 @@ async function executeAction(
         }),
       )
     } catch (error) {
-      logHookFailure(event, sourceFilePath, error)
+      await logHookFailure(event, sourceFilePath, error, client, hookName)
     }
 
     return { blocked: false }
@@ -681,7 +713,7 @@ async function executeAction(
         }),
       )
     } catch (error) {
-      logHookFailure(event, sourceFilePath, error)
+      await logHookFailure(event, sourceFilePath, error, client, hookName)
     }
 
     return { blocked: false }
@@ -692,6 +724,7 @@ async function executeAction(
     command: config.command,
     timeout: config.timeout,
     projectDir: executionDirectory,
+    client,
     context: {
       session_id: sessionID,
       event,
@@ -705,6 +738,63 @@ async function executeAction(
 
   if (result.blocking) {
     return { blocked: true, blockReason: result.stderr.trim() || "Blocked by hook" }
+  }
+
+  if (result.status === "failed" || result.status === "timed_out") {
+    const durationMs = result.durationMs
+    const exitCode = result.exitCode
+    const statusText = result.status === "timed_out"
+      ? `⏱ timeout (${durationMs}ms)`
+      : `✗ exit ${exitCode} (${durationMs}ms)`
+
+    const displayName = hookName ?? (() => {
+      const bashConfig = action.bash
+      if (typeof bashConfig === "string") {
+        return bashConfig.split("/").pop()?.split(" ")[0] ?? "unknown"
+      }
+      if (bashConfig && typeof bashConfig === "object" && "command" in bashConfig) {
+        return bashConfig.command.split("/").pop()?.split(" ")[0] ?? "unknown"
+      }
+      return "unknown"
+    })()
+
+    const lines: string[] = [
+      "Hook Execution Failed",
+      `${displayName} ${statusText}`,
+    ]
+
+    // Build event + context line
+    const contextParts: string[] = [event]
+    if (context.files && context.files.length > 0) {
+      const relativeFiles = context.files.map((f) => {
+        if (!isAbsolute(f)) return f
+        const rel = relative(executionDirectory, f)
+        return rel && !rel.startsWith("..") ? rel : f
+      })
+      const fileList = relativeFiles.slice(0, 3)
+      const fileStr = relativeFiles.length <= 3
+        ? fileList.join(", ")
+        : `${fileList.join(", ")} +${relativeFiles.length - 3} more`
+      contextParts.push(`· ${fileStr}`)
+    } else if (context.toolName) {
+      contextParts.push(`· ${context.toolName}`)
+    }
+    lines.push(contextParts.join(" "))
+
+    const truncatedCmd = truncateCommand(result.command)
+    lines.push(`Cmd: ${truncatedCmd}`)
+
+    try {
+      await client?.tui.showToast({
+        body: {
+          title: "opencode-yaml-hooks",
+          message: lines.join("\n"),
+          variant: result.status === "timed_out" ? "warning" : "error",
+          duration: 8000,
+        },
+      })
+    } catch (toastError) {
+    }
   }
 
   return { blocked: false }
@@ -722,14 +812,17 @@ async function resolveActionSessionID(
   return state.isDeleted(targetSessionID) ? undefined : targetSessionID
 }
 
-async function abortSession(input: PluginInput, sessionID: string): Promise<void> {
+async function abortSession(input: PluginInput, sessionID: string, client?: PluginInput["client"]): Promise<void> {
   try {
     await (input.client.session as PluginInput["client"]["session"] & {
       abort: (request: { path: { id: string } }) => Promise<unknown>
     }).abort({ path: { id: sessionID } })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    console.error(`[opencode-yaml-hooks] Failed to abort session ${sessionID}: ${message}`)
+    const msg = `Failed to abort session ${sessionID}: ${message}`
+    try {
+      await client?.app.log({ body: { service: "opencode-yaml-hooks", level: "error", message: msg } })
+    } catch { console.error(`[opencode-yaml-hooks] ${msg}`) }
   }
 }
 
@@ -774,9 +867,19 @@ function resolveToolArgs(
   return pendingArgs ?? eventArgs ?? {}
 }
 
-function logHookFailure(event: HookEvent, filePath: string, error: unknown): void {
+async function logHookFailure(
+  event: HookEvent,
+  filePath: string,
+  error: unknown,
+  client?: PluginInput["client"],
+  hookName?: string,
+): Promise<void> {
   const message = error instanceof Error ? error.message : String(error)
-  console.error(`[opencode-yaml-hooks] ${event} hook from ${filePath} failed: ${message}`)
+  const hookId = hookName ? ` [${hookName}]` : ""
+  const msg = `${event} hook${hookId} from ${filePath} failed: ${message}`
+  try {
+    await client?.app.log({ body: { service: "opencode-yaml-hooks", level: "error", message: msg } })
+  } catch { console.error(`[opencode-yaml-hooks] ${msg}`) }
 }
 
 async function withActionRecursionGuard<T>(

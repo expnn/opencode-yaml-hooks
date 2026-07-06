@@ -245,13 +245,14 @@ function shellTokenize(segment: string): string[] {
 
 function extractPathArgs(tokens: string[], startIndex: number): string[] {
   const paths: string[] = []
+  let afterDoubleDash = false
   for (let i = startIndex; i < tokens.length; i++) {
     const token = tokens[i]
-    if (token.startsWith("-")) {
-      if (token === "--") {
-        startIndex = i + 1
-        continue
-      }
+    if (token === "--" && !afterDoubleDash) {
+      afterDoubleDash = true
+      continue
+    }
+    if (!afterDoubleDash && token.startsWith("-")) {
       continue
     }
     paths.push(token)

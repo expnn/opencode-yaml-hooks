@@ -1,0 +1,16 @@
+{
+    "languages": {
+        "JSON": {
+            "tab_size": 2,
+            "format_on_save": "on"
+        },
+        "TypeScript": {
+            "tab_size": 2,
+            "format_on_save": "on"
+        },
+        "JavaScript": {
+            "tab_size": 2,
+            "format_on_save": "on"
+        }
+    }
+}

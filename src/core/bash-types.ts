@@ -1,3 +1,5 @@
+import type { PluginInput } from "@opencode-ai/plugin"
+
 import type { FileChange } from "./types.js"
 
 export const DEFAULT_BASH_TIMEOUT = 60_000
@@ -17,6 +19,7 @@ export interface BashExecutionRequest {
   readonly context: BashHookContext
   readonly projectDir: string
   readonly timeout?: number
+  readonly client?: PluginInput["client"]
 }
 
 export interface BashProcessResult {
